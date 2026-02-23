@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#111111">
+<link rel="manifest" href="manifest.json">
+<title>Planeador Estratégico</title>
+
+<style>
+:root {
+    --bg:#0f0f10;
+    --card:#1c1c1e;
+    --accent:#0a84ff;
+    --success:#30d158;
+    --danger:#ff453a;
+    --text:#ffffff;
+    --muted:#8e8e93;
+}
+
+body {
+    margin:0;
+    font-family:-apple-system, BlinkMacSystemFont, sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    padding:20px;
+}
+
+h1 {
+    margin:0 0 5px 0;
+    font-size:28px;
+    font-weight:700;
+}
+
+.subtitle {
+    color:var(--muted);
+    font-size:14px;
+    margin-bottom:25px;
+}
+
+.card {
+    background:var(--card);
+    border-radius:18px;
+    padding:18px;
+    margin-bottom:18px;
+}
+
+label {
+    font-size:13px;
+    color:var(--muted);
+}
+
+input[type="time"] {
+    width:100%;
+    margin-top:6px;
+    padding:14px;
+    border-radius:12px;
+    border:none;
+    background:#2c2c2e;
+    color:white;
+    font-size:18px;
+}
+
+.activity {
+    padding:14px;
+    border-radius:12px;
+    margin-top:10px;
+    background:#2c2c2e;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    font-size:16px;
+    cursor:pointer;
+    transition:0.2s;
+}
+
+.activity.selected {
+    background:var(--accent);
+}
+
+button {
+    width:100%;
+    padding:16px;
+    margin-top:10px;
+    border:none;
+    border-radius:14px;
+    font-size:17px;
+    font-weight:600;
+    background:var(--accent);
+    color:white;
+}
+
+.result {
+    font-size:22px;
+    font-weight:700;
+    text-align:center;
+    margin-top:10px;
+}
+
+.status {
+    text-align:center;
+    margin-top:5px;
+    font-size:14px;
+}
+
+.status.ok { color:var(--success); }
+.status.bad { color:var(--danger); }
+
+.history-item {
+    font-size:13px;
+    padding:8px 0;
+    border-bottom:1px solid #2c2c2e;
+    color:var(--muted);
+}
+</style>
+</head>
+<body>
+
+<h1>Planeador</h1>
+<div class="subtitle">Performance diária estratégica</div>
+
+<div class="card">
+    <label>Hora de saída</label>
+    <input type="time" id="departureTime" value="18:00">
+</div>
+
+<div class="card">
+    <label>Ordem das atividades (toca para ativar)</label>
+
+    <div id="activitiesList">
+        <div class="activity" draggable="true" data-id="gym">🏋️ Ginásio</div>
+        <div class="activity" draggable="true" data-id="friends">👥 Amigos</div>
+        <div class="activity" draggable="true" data-id="family">👨‍👩‍👦 Família</div>
+        <div class="activity" draggable="true" data-id="shopping">🛒 Compras</div>
+    </div>
+
+    <button onclick="calculate()">Calcular chegada</button>
+
+    <div class="result" id="result"></div>
+    <div class="status" id="status"></div>
+</div>
+
+<div class="card">
+    <label>Últimos 10 registos</label>
+    <div id="historyList"></div>
+</div>
+
+<script>
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('service-worker.js');
+}
+
+const activitiesData = {
+    gym: { travelFromWork:60, baseDuration:120, travelToHome:45 },
+    friends: { travelFromWork:10, baseDuration:120, travelToHome:45 },
+    family: { travelFromWork:45, baseDuration:60, travelToHome:45 },
+    shopping: { travelFromWork:45, baseDuration:30, travelToHome:30 }
+};
+
+function calculate() {
+    const departure = document.getElementById("departureTime").value;
+    const [h,m] = departure.split(":").map(Number);
+    let totalMinutes = h*60 + m;
+
+    const ordered = [...document.querySelectorAll(".activity.selected")]
+        .map(el => el.dataset.id);
+
+    if(ordered.length===0){
+        document.getElementById("result").innerText="Seleciona atividades";
+        return;
+    }
+
+    let gymDuration=120;
+    if(h>=19) gymDuration=90;
+    if(ordered.includes("gym") && ordered.includes("friends")) gymDuration=90;
+
+    let totalExtra=0;
+
+    ordered.forEach(id=>{
+        let data=activitiesData[id];
+        let duration = (id==="gym")? gymDuration : data.baseDuration;
+        totalExtra += data.travelFromWork + duration;
+    });
+
+    totalExtra += activitiesData[ordered[ordered.length-1]].travelToHome;
+    totalMinutes+=totalExtra;
+
+    const arrivalH=Math.floor(totalMinutes/60)%24;
+    const arrivalM=totalMinutes%60;
+
+    const formatted=
+        String(arrivalH).padStart(2,'0')+":"+
+        String(arrivalM).padStart(2,'0');
+
+    document.getElementById("result").innerText=formatted;
+
+    const status=document.getElementById("status");
+
+    if(arrivalH>=22){
+        status.innerText="Ultrapassa objetivo 22:00";
+        status.className="status bad";
+    }else{
+        status.innerText="Dentro do objetivo";
+        status.className="status ok";
+    }
+
+    saveHistory(formatted, ordered);
+}
+
+function saveHistory(time, activities){
+    let history=JSON.parse(localStorage.getItem("history"))||[];
+    history.unshift({
+        time:time,
+        activities:activities.join(", "),
+        date:new Date().toLocaleDateString()
+    });
+    history=history.slice(0,10);
+    localStorage.setItem("history",JSON.stringify(history));
+    renderHistory();
+}
+
+function renderHistory(){
+    let history=JSON.parse(localStorage.getItem("history"))||[];
+    let html="";
+    history.forEach(h=>{
+        html+=`<div class="history-item">${h.date} • ${h.time} • ${h.activities}</div>`;
+    });
+    document.getElementById("historyList").innerHTML=html;
+}
+
+renderHistory();
+
+document.querySelectorAll(".activity").forEach(item=>{
+    item.addEventListener("click",()=>{
+        item.classList.toggle("selected");
+    });
+
+    item.addEventListener("dragstart",()=>dragged=item);
+    item.addEventListener("dragover",e=>e.preventDefault());
+    item.addEventListener("drop",()=>item.parentNode.insertBefore(dragged,item));
+});
+
+let dragged;
+</script>
+
+</body>
+</html>
